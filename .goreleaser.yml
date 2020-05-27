@@ -1,0 +1,30 @@
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - dir: ./cmd/anemometer
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -v
+    ldflags:
+      - -X github.com/simplifi/anemometer/pkg/anemometer/version.Version={{.Version}}
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm
+      - arm64
+
+archives:
+  - format: tar.gz
+    files:
+      - none*
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  skip: true
