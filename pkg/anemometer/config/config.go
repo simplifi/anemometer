@@ -35,7 +35,8 @@ type Config struct {
 
 // StatsdConfig holds statsd specific configuration
 type StatsdConfig struct {
-	Address string `mapstructure:"address"`
+	Address string   `mapstructure:"address"`
+	Tags    []string `mapstructure:"tags"`
 }
 
 // DatabaseConfig holds database connection specific configuration

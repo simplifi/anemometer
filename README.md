@@ -37,6 +37,8 @@ The latest version of Anemometer can be found on the [Releases](https://github.c
 ```yaml
 statsd:
   address: 127.0.0.1:8125
+  tags:
+    - environment:production
 monitors:
   - name: airflow-dag-disabled
     database:
@@ -65,6 +67,7 @@ monitors:
 ### `statsd`
 This is where you tell Anemometer where to send StatsD metrics
 - `address` - The address:port on which StatsD is listening (usually `127.0.0.1:8125`)
+- `tags` - Default tags to send with every metric, optional
 
 ### `monitors`
 This is where you tell Anemometer about the monitor(s) configuration
