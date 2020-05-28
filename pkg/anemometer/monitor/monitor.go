@@ -31,7 +31,10 @@ func New(statsdConfig config.StatsdConfig, monitorConfig config.MonitorConfig) (
 		return nil, err
 	}
 
-	statsdClient, err := createStatsdClient(statsdConfig.Address)
+	statsdClient, err := createStatsdClient(
+		statsdConfig.Address,
+		statsdConfig.Tags,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -62,8 +65,11 @@ func createDBConn(dbType string, dbURI string) (*sql.DB, error) {
 	return conn, nil
 }
 
-func createStatsdClient(address string) (*statsd.Client, error) {
-	client, err := statsd.New(address)
+func createStatsdClient(address string, tags []string) (*statsd.Client, error) {
+	client, err := statsd.New(
+		address,
+		statsd.WithTags(tags),
+	)
 	if err != nil {
 		return nil, err
 	}
