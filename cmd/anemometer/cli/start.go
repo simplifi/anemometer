@@ -10,6 +10,7 @@ import (
 
 var (
 	configPath string
+	debug      bool
 )
 
 var startCmd = &cobra.Command{
@@ -27,6 +28,12 @@ func init() {
 		"c",
 		"/etc/anemometer.yml",
 		"the full path to the yaml config file, default: /etc/anemometer.yml")
+	startCmd.Flags().BoolVarP(
+		&debug,
+		"debug",
+		"d",
+		false,
+		"enable debugging output in the logs, default: false")
 	rootCmd.AddCommand(startCmd)
 }
 
@@ -47,7 +54,7 @@ func start() {
 		if err != nil {
 			log.Panicf("ERROR: Failed to start monitor '%v': %v", mtConfig.Name, err)
 		}
-		go mt.Start()
+		go mt.Start(debug)
 	}
 	// Block until something kills the process
 	<-exit
