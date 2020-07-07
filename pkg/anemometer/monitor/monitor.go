@@ -78,15 +78,15 @@ func createStatsdClient(address string, tags []string) (*statsd.Client, error) {
 }
 
 // Start the Monitor
-func (m *Monitor) Start() {
+func (m *Monitor) Start(debug bool) {
 	for {
-		log.Printf("INFO: Sleeping for %d seconds", m.sleepDuration)
+		log.Printf("INFO: [%s] Sleeping for %d seconds", m.name, m.sleepDuration)
 		time.Sleep(time.Duration(m.sleepDuration) * time.Second)
 
 		// Execute our query
 		rows, err := m.databaseConn.Query(m.sql)
 		if err != nil {
-			log.Printf("ERROR: %v", err)
+			log.Printf("ERROR: [%s] %v", m.name, err)
 			sendErrorMetric(m.statsdClient, m.name)
 			continue
 		}
@@ -98,7 +98,7 @@ func (m *Monitor) Start() {
 			// Convert our result row into a map
 			rowMap, err := rowsToMap(cols, rows)
 			if err != nil {
-				log.Printf("ERROR: %v", err)
+				log.Printf("ERROR: [%s] %v", m.name, err)
 				sendErrorMetric(m.statsdClient, m.name)
 				continue
 			}
@@ -106,7 +106,7 @@ func (m *Monitor) Start() {
 			// Grab the metric column from the results and convert it
 			metric, err := getMetric(rowMap)
 			if err != nil {
-				log.Printf("ERROR: %v", err)
+				log.Printf("ERROR: [%s] %v", m.name, err)
 				sendErrorMetric(m.statsdClient, m.name)
 				continue
 			}
@@ -115,8 +115,17 @@ func (m *Monitor) Start() {
 			tags := getTags(rowMap)
 
 			// Push the metric to Datadog
+			if debug {
+				log.Printf(
+					"DEBUG: [%s] Publishing metric - Name: %s, Value: %f, Tags: %v",
+					m.name,
+					m.metric,
+					metric,
+					tags,
+				)
+			}
 			if err = m.statsdClient.Gauge(m.metric, metric, tags, 1); err != nil {
-				log.Printf("ERROR: %v", err)
+				log.Printf("ERROR: [%s] %v", m.name, err)
 				sendErrorMetric(m.statsdClient, m.name)
 			}
 		}
