@@ -1,0 +1,21 @@
+name: Lint, Test, and Build Workflow
+
+on: # yamllint disable-line rule:truthy
+  workflow_dispatch:
+  push:
+    branches: ["!main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  lint_test_build:
+    name: Run linting, testing, and image build
+    uses: myfintech/sre-github-actions/.github/workflows/go-lint-test-build-artifact-registry-self-hosted.yaml@main
+    with:
+      lint-timeout-duration: 5m
+      image-name: 'mantl/vault-auth'
+    secrets:
+      build-args: GH_ACCESS_TOKEN=${{ secrets.GH_TOKEN }}
+      sdm-service-account: ${{ secrets.STRONGDM_SERVICE_ACCOUNT }}
+      gcp-sa-key: ${{ secrets.GOOGLE_CLOUD_SERVICE_ACCOUNT_KEY }}
+      gh-token: ${{ secrets.GH_TOKEN }}

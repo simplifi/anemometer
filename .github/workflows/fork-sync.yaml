@@ -1,0 +1,21 @@
+name: Sync Fork
+
+on:
+  schedule:
+    - cron: '0 6 */7 * *' # every 7 days
+  workflow_dispatch: # on button click
+
+jobs:
+  sync:
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: tgymnich/fork-sync@v1.8
+        with:
+          token: ${{ secrets.GH_PAT }}
+          owner: simplifi
+          repo: anemometer
+          base: master
+          head: master
+          auto_approve: true
