@@ -5,7 +5,7 @@ go 1.21
 require (
 	github.com/DataDog/datadog-go v4.8.3+incompatible
 	github.com/lib/pq v1.10.9
-	github.com/spf13/cobra v1.8.0
+	github.com/spf13/cobra v1.8.1
 	github.com/spf13/viper v1.19.0
 	github.com/stretchr/testify v1.9.0
 	github.com/vertica/vertica-sql-go v1.3.3
