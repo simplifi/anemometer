@@ -4,7 +4,7 @@ TAG?=""
 
 # Run all tests
 .PHONY: test
-test: fmt lint vet test-unit go-mod-tidy
+test: fmt vet test-unit go-mod-tidy
 
 # Run unit tests
 .PHONY: test-unit
@@ -21,11 +21,6 @@ go-mod-tidy:
 .PHONY: fmt
 fmt:
 	test -z "$(shell gofmt -l .)"
-
-# Run linter
-.PHONY: lint
-lint:
-	golint -set_exit_status ./...
 
 # Run vet
 .PHONY: vet

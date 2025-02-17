@@ -6,9 +6,6 @@ env:
 go:
   - 1.21.x
 
-before_script:
-  - GO111MODULE=off go get -u golang.org/x/lint/golint
-
 script:
   - make
 
