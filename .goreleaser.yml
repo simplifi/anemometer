@@ -1,3 +1,5 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+
 version: 2
 
 before:
@@ -16,10 +18,10 @@ builds:
       - go_first_class
 
 archives:
-  - format: tar.gz
+  - formats: ['tar.gz']
     format_overrides:
       - goos: windows
-        format: zip
+        formats: ['zip']
 
 checksum:
   name_template: "checksums.txt"
