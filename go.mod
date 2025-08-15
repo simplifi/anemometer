@@ -7,9 +7,10 @@ toolchain go1.24.2
 require (
 	github.com/DataDog/datadog-go v4.8.3+incompatible
 	github.com/lib/pq v1.10.9
+	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/spf13/cobra v1.8.1
 	github.com/spf13/viper v1.19.0
-	github.com/stretchr/testify v1.9.0
+	github.com/stretchr/testify v1.10.0
 	github.com/vertica/vertica-sql-go v1.3.3
 	github.com/viant/bigquery v0.5.1
 )
@@ -58,6 +59,7 @@ require (
 	github.com/spf13/afero v1.11.0 // indirect
 	github.com/spf13/cast v1.6.0 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
+	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/viant/afs v1.25.1-0.20231110184132-877ed98abca1 // indirect
 	github.com/viant/parsly v0.0.0-20220907184615-a27c125714a1 // indirect
