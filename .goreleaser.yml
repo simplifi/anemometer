@@ -1,3 +1,7 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+
+version: 2
+
 before:
   hooks:
     - go mod tidy
@@ -10,21 +14,17 @@ builds:
       - -v
     ldflags:
       - -X github.com/simplifi/anemometer/pkg/anemometer/version.Version={{.Version}}
-    goos:
-      - darwin
-      - linux
-    goarch:
-      - amd64
-      - arm
-      - arm64
+    targets:
+      - go_first_class
 
 archives:
-  - format: tar.gz
-    files:
-      - none*
+  - formats: ['tar.gz']
+    format_overrides:
+      - goos: windows
+        formats: ['zip']
 
 checksum:
   name_template: "checksums.txt"
 
 changelog:
-  skip: true
+  disable: true
