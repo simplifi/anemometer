@@ -188,6 +188,18 @@ Use "anemometer [command] --help" for more information about a command.
 anemometer start -c /path/to/your/config.yml
 ```
 
+### Using Docker
+
+You can run Anemometer using Docker with the image from GitHub Container
+Registry:
+
+```shell script
+docker run -v /path/to/your/config.yml:/config.yml ghcr.io/simplifi/anemometer start -c /config.yml
+```
+
+This mounts your local configuration file into the container and runs the start
+command.
+
 # Development
 
 ### Testing locally

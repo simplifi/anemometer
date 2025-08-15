@@ -30,7 +30,7 @@ vet:
 # Run a test release with goreleaser
 .PHONY: test-release
 test-release:
-	goreleaser --snapshot --skip-publish --rm-dist
+	goreleaser --snapshot --clean
 
 # Clean up any cruft left over from old builds
 .PHONY: clean
