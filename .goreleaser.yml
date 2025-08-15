@@ -23,6 +23,11 @@ archives:
       - goos: windows
         formats: ['zip']
 
+dockers:
+  - image_templates:
+      - "ghcr.io/simplifi/anemometer:{{ .Tag }}"
+      - "ghcr.io/simplifi/anemometer:latest"
+
 checksum:
   name_template: "checksums.txt"
 
