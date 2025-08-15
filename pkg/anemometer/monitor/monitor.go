@@ -10,6 +10,7 @@ import (
 	_ "github.com/lib/pq" // Postgres driver
 	"github.com/simplifi/anemometer/pkg/anemometer/config"
 	_ "github.com/vertica/vertica-sql-go" // Vertica driver
+	_ "github.com/viant/bigquery"         // BigQuery driver
 )
 
 // Monitor runs a query and pushes results to DataDog as metrics/tags
