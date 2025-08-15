@@ -22,6 +22,7 @@ We currently support the following databases:
 - Postgres
 - Vertica
 - BigQuery
+- SQLite (mostly for local development and testing)
 
 ### Adding support for another database
 
@@ -51,27 +52,47 @@ statsd:
   tags:
     - environment:production
 monitors:
+  # Gauge metric (default) - values that can go up or down
   - name: airflow-dag-disabled
     database:
       type: postgres
       uri: postgresql://username:password@localhost:5432/database?sslmode=disable
     sleep_duration: 300
     metric: airflow.dag.disabled
+    metric_type: gauge # optional - this is the default
     sql: >
       SELECT  dag_id AS dag_id,
               CASE WHEN is_paused AND NOT is_subdag THEN 1 ELSE 0 END AS metric
       FROM    dag
+
+  # Histogram metric - statistical distribution on each host
   - name: airflow-task-queued-seconds
     database:
       type: postgres
       uri: postgresql://username:password@localhost:5432/database?sslmode=disable
     sleep_duration: 300
     metric: airflow.task.queued_seconds
+    metric_type: histogram
     sql: >
       SELECT dag_id AS dag_id,
              task_id AS task_id,
              EXTRACT(EPOCH FROM (current_timestamp - queued_dttm)) AS metric
       FROM   task_instance WHERE  state = 'queued'
+
+  # Count metric - track number of events
+  - name: failed-tasks-count
+    database:
+      type: postgres
+      uri: postgresql://username:password@localhost:5432/database?sslmode=disable
+    sleep_duration: 60
+    metric: airflow.task.failed
+    metric_type: count
+    sql: >
+      SELECT dag_id AS dag_id,
+             COUNT(*) AS metric
+      FROM   task_instance WHERE  state = 'failed'
+        AND  end_date > NOW() - INTERVAL '1 hour'
+      GROUP BY dag_id
 ```
 
 ### `statsd`
@@ -87,12 +108,14 @@ This is where you tell Anemometer where to send StatsD metrics
 This is where you tell Anemometer about the monitor(s) configuration
 
 - `name` - The name of this monitor, mainly used in logging
-- `database.type` - The type of database connection to be used (`postgres` and
-  `vertica` are currently supported)
+- `database.type` - The type of database connection to be used (`postgres`,
+  `vertica`, `bigquery`, and `sqlite3` are currently supported)
 - `database.uri` - The URI connection string used to connect to the database
   (usually follows `protocol://username:password@hostname:port/database`)
 - `sleep_duration` - How long to wait between pushes to StatsD (in seconds)
 - `metric` - The name of the metric to be sent to StatsD
+- `metric_type` - The type of metric to send to Datadog (optional, defaults to
+  `gauge`)
 - `sql` - The SQL query to execute when populating the metric's values/tags (see
   [SQL Query Structure](#sql-query-structure))
 
@@ -104,6 +127,44 @@ Anemometer makes the following assumptions about the results of your query:
   `float64` (no strings)
 - All other columns will be aggregated into tags and sent to StatsD
 - The tags will take the form of `column_name:value`
+
+## Metric Types
+
+Anemometer supports all four Datadog metric types. You can specify the metric
+type using the `metric_type` configuration option:
+
+### Gauge (default)
+
+- **Use case**: Values that can go up or down (e.g., CPU usage, memory usage,
+  queue depth)
+- **Configuration**: `metric_type: gauge` (or omit for default)
+- **StatsD format**: `metric_name:value|g|#tags`
+
+### Count
+
+- **Use case**: Track how many times something happened (e.g., requests, errors,
+  events)
+- **Configuration**: `metric_type: count`
+- **StatsD format**: `metric_name:value|c|#tags`
+- **Note**: Values are converted to integers
+
+### Histogram
+
+- **Use case**: Track statistical distribution of values on each host (e.g.,
+  request latency, file sizes)
+- **Configuration**: `metric_type: histogram`
+- **StatsD format**: `metric_name:value|h|#tags`
+
+### Distribution
+
+- **Use case**: Track statistical distribution of values across your
+  infrastructure (e.g., request latency across all hosts)
+- **Configuration**: `metric_type: distribution`
+- **StatsD format**: `metric_name:value|d|#tags`
+
+**Note**: The `metric_type` field is optional and defaults to `gauge` for
+backwards compatibility. Existing configurations will continue to work without
+any changes.
 
 ### Query Example
 
@@ -127,8 +188,8 @@ Resulting in the following:
  production  | users      |     99
 ```
 
-Assuming we named our metric `table.records`, this would result in the following
-data being sent to StatsD:
+Assuming we named our metric `table.records` with `metric_type: gauge`, this
+would result in the following data being sent to StatsD:
 `table.records:99|g|#environment:production,table_name:users`
 
 #### Multiple row result
@@ -154,10 +215,10 @@ Resulting in the following:
  production  | postgres  |      6
 ```
 
-Assuming we named our metric `database.queries`, this would result in the
-following data being sent to StatsD:
-`database.queries:160|g|#environment:production,user_name:cjonesy`
-`database.queries:6|g|#environment:production,user_name:postgres`
+Assuming we named our metric `database.queries` with `metric_type: count`, this
+would result in the following data being sent to StatsD:
+`database.queries:160|c|#environment:production,user_name:cjonesy`
+`database.queries:6|c|#environment:production,user_name:postgres`
 
 Notice that one metric is sent for each row in the query.
 

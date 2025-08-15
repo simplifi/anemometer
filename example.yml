@@ -1,0 +1,15 @@
+statsd:
+  address: 127.0.0.1:8125
+  tags:
+    - environment:prod
+monitors:
+  # Example SQLite monitor (great for local development and testing!)
+  - name: test-metric
+    database:
+      type: sqlite3
+      uri: ':memory:'
+    sleep_duration: 1
+    metric: test.metric
+    metric_type: gauge
+    sql: >
+      SELECT 1 AS metric;

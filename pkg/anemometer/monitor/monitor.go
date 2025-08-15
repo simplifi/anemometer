@@ -7,7 +7,8 @@ import (
 	"time"
 
 	"github.com/DataDog/datadog-go/statsd"
-	_ "github.com/lib/pq" // Postgres driver
+	_ "github.com/lib/pq"           // Postgres driver
+	_ "github.com/mattn/go-sqlite3" // SQLite driver
 	"github.com/simplifi/anemometer/pkg/anemometer/config"
 	_ "github.com/vertica/vertica-sql-go" // Vertica driver
 	_ "github.com/viant/bigquery"         // BigQuery driver
@@ -16,12 +17,11 @@ import (
 // Monitor runs a query and pushes results to DataDog as metrics/tags
 type Monitor struct {
 	databaseConn  *sql.DB
-	statsdClient  *statsd.Client
+	statsdClient  statsd.ClientInterface
 	name          string
-	dbType        string
-	dbURI         string
 	sleepDuration int
 	metric        string
+	metricType    string
 	sql           string
 }
 
@@ -46,6 +46,7 @@ func New(statsdConfig config.StatsdConfig, monitorConfig config.MonitorConfig) (
 		name:          monitorConfig.Name,
 		sleepDuration: monitorConfig.SleepDuration,
 		metric:        monitorConfig.Metric,
+		metricType:    monitorConfig.MetricType,
 		sql:           monitorConfig.SQL,
 	}
 
@@ -58,7 +59,7 @@ func createDBConn(dbType string, dbURI string) (*sql.DB, error) {
 		return nil, err
 	}
 
-	conn.Ping()
+	err = conn.Ping()
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +67,7 @@ func createDBConn(dbType string, dbURI string) (*sql.DB, error) {
 	return conn, nil
 }
 
-func createStatsdClient(address string, tags []string) (*statsd.Client, error) {
+func createStatsdClient(address string, tags []string) (statsd.ClientInterface, error) {
 	client, err := statsd.New(
 		address,
 		statsd.WithTags(tags),
@@ -76,6 +77,32 @@ func createStatsdClient(address string, tags []string) (*statsd.Client, error) {
 	}
 
 	return client, nil
+}
+
+// sendMetric sends the appropriate metric type to Datadog based on the configured metric type
+func (m *Monitor) sendMetric(rowMap map[string]interface{}, tags []string, debug bool) error {
+	metricFloat, err := getMetricFloat64(rowMap)
+	if err != nil {
+		return err
+	}
+
+	if debug {
+		log.Printf("DEBUG: [%s] Publishing %s metric - Name: %s, Value: %v, Tags: %v",
+			m.name, m.metricType, m.metric, metricFloat, tags)
+	}
+
+	switch m.metricType {
+	case "count":
+		return m.statsdClient.Count(m.metric, int64(metricFloat), tags, 1)
+	case "histogram":
+		return m.statsdClient.Histogram(m.metric, metricFloat, tags, 1)
+	case "distribution":
+		return m.statsdClient.Distribution(m.metric, metricFloat, tags, 1)
+	case "gauge":
+		return m.statsdClient.Gauge(m.metric, metricFloat, tags, 1)
+	default:
+		return fmt.Errorf("unknown metric type: %s", m.metricType)
+	}
 }
 
 // Start the Monitor
@@ -93,7 +120,7 @@ func (m *Monitor) Start(debug bool) {
 		}
 		cols, _ := rows.Columns()
 
-		// // Iterate on the resulting rows
+		// Iterate on the resulting rows
 		for rows.Next() {
 
 			// Convert our result row into a map
@@ -104,28 +131,11 @@ func (m *Monitor) Start(debug bool) {
 				continue
 			}
 
-			// Grab the metric column from the results and convert it
-			metric, err := getMetric(rowMap)
-			if err != nil {
-				log.Printf("ERROR: [%s] %v", m.name, err)
-				sendErrorMetric(m.statsdClient, m.name)
-				continue
-			}
-
 			// Aggregate all the tags from the query
 			tags := getTags(rowMap)
 
-			// Push the metric to Datadog
-			if debug {
-				log.Printf(
-					"DEBUG: [%s] Publishing metric - Name: %s, Value: %f, Tags: %v",
-					m.name,
-					m.metric,
-					metric,
-					tags,
-				)
-			}
-			if err = m.statsdClient.Gauge(m.metric, metric, tags, 1); err != nil {
+			// Send the metric to Datadog using the configured metric type
+			if err = m.sendMetric(rowMap, tags, debug); err != nil {
 				log.Printf("ERROR: [%s] %v", m.name, err)
 				sendErrorMetric(m.statsdClient, m.name)
 			}
@@ -135,7 +145,7 @@ func (m *Monitor) Start(debug bool) {
 }
 
 // Sends an error metric to StatsD
-func sendErrorMetric(statsdClient *statsd.Client, name string) {
+func sendErrorMetric(statsdClient statsd.ClientInterface, name string) {
 	statsdClient.Gauge(
 		"anemometer.error",
 		1,
@@ -190,39 +200,39 @@ func getTags(results map[string]interface{}) []string {
 	return tags
 }
 
-// Function to pull the 'metric' column's value, convert, and return it as float
+// Function to pull the 'metric' column's value, convert, and return it as float64
 // If conversion isn't possible, or column is missing, this will return an error
-func getMetric(results map[string]interface{}) (float64, error) {
+func getMetricFloat64(results map[string]interface{}) (float64, error) {
 	var metric float64
 
 	if val, ok := results["metric"]; ok {
 		// We have a metric column, so we'll convert it to float64
-		switch val.(type) {
+		switch v := val.(type) {
 		case int:
-			metric = float64(val.(int))
+			metric = float64(v)
 		case int8:
-			metric = float64(val.(int8))
+			metric = float64(v)
 		case int16:
-			metric = float64(val.(int16))
+			metric = float64(v)
 		case int32:
-			metric = float64(val.(int32))
+			metric = float64(v)
 		case int64:
-			metric = float64(val.(int64))
+			metric = float64(v)
 		case float32:
-			metric = float64(val.(float32))
+			metric = float64(v)
 		case float64:
-			metric = val.(float64)
+			metric = v
 		case bool:
-			if val.(bool) {
+			if v {
 				metric = 1
 			} else {
 				metric = 0
 			}
 		default:
-			return -1, fmt.Errorf("Failed to convert metric column value: '%v'", val)
+			return -1, fmt.Errorf("failed to convert metric column value: '%v'", val)
 		}
 	} else {
-		return -1, fmt.Errorf("No metric column found")
+		return -1, fmt.Errorf("no metric column found")
 	}
 
 	return metric, nil
