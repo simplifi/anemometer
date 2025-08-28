@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -18,6 +19,7 @@ monitors:
       uri: postgresql://username:password@localhost:5432/database
     sleep_duration: 300
     metric: database.queries
+    metric_type: gauge
     sql: >
       SELECT    'production' AS environment,
                 usename AS user_name,
@@ -51,6 +53,7 @@ type MonitorConfig struct {
 	DatabaseConfig DatabaseConfig `mapstructure:"database"`
 	SleepDuration  int            `mapstructure:"sleep_duration"`
 	Metric         string         `mapstructure:"metric"`
+	MetricType     string         `mapstructure:"metric_type"`
 	SQL            string         `mapstructure:"sql"`
 }
 
@@ -72,6 +75,15 @@ func Read(configPath string) (*Config, error) {
 	unmarshalErr := viper.Unmarshal(config)
 	if unmarshalErr != nil {
 		return nil, unmarshalErr
+	}
+
+	// Set default metric types and normalize case for backwards compatibility
+	for i := range config.Monitors {
+		if config.Monitors[i].MetricType == "" {
+			config.Monitors[i].MetricType = "gauge"
+		} else {
+			config.Monitors[i].MetricType = strings.ToLower(config.Monitors[i].MetricType)
+		}
 	}
 
 	return config, nil
