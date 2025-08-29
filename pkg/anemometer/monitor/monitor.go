@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/DataDog/datadog-go/statsd"
+	"github.com/DataDog/datadog-go/v5/statsd"
 	_ "github.com/lib/pq"           // Postgres driver
 	_ "github.com/mattn/go-sqlite3" // SQLite driver
 	"github.com/simplifi/anemometer/pkg/anemometer/config"
