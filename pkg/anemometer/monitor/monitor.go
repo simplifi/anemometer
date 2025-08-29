@@ -118,7 +118,13 @@ func (m *Monitor) Start(debug bool) {
 			sendErrorMetric(m.statsdClient, m.name)
 			continue
 		}
-		cols, _ := rows.Columns()
+
+		cols, err := rows.Columns()
+		if err != nil {
+			log.Printf("ERROR: [%s] %v", m.name, err)
+			sendErrorMetric(m.statsdClient, m.name)
+			continue
+		}
 
 		// Iterate on the resulting rows
 		for rows.Next() {
