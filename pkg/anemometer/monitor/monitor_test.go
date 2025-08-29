@@ -244,21 +244,7 @@ func TestGetTags(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := getTags(tt.input)
-
-			assert.Equal(t, len(tt.expected), len(result), "Expected %d tags, got %d", len(tt.expected), len(result))
-
-			// Check that all expected tags are present (order doesn't matter)
-			expectedMap := make(map[string]bool)
-			for _, tag := range tt.expected {
-				expectedMap[tag] = true
-			}
-
-			for _, tag := range result {
-				assert.True(t, expectedMap[tag], "Unexpected tag: %s", tag)
-				delete(expectedMap, tag)
-			}
-
-			assert.Equal(t, 0, len(expectedMap), "Missing expected tags: %v", expectedMap)
+			assert.ElementsMatch(t, tt.expected, result)
 		})
 	}
 }
