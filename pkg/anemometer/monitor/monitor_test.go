@@ -2,100 +2,13 @@ package monitor
 
 import (
 	"testing"
-	"time"
 
-	"github.com/DataDog/datadog-go/statsd"
+	mock_statsd "github.com/DataDog/datadog-go/v5/statsd/mocks"
+	"github.com/golang/mock/gomock"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/simplifi/anemometer/pkg/anemometer/config"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 )
-
-// MockStatsDClient is a testify mock implementation of statsd.ClientInterface
-type MockStatsDClient struct {
-	mock.Mock
-}
-
-func (m *MockStatsDClient) Gauge(name string, value float64, tags []string, rate float64) error {
-	args := m.Called(name, value, tags, rate)
-	return args.Error(0)
-}
-
-func (m *MockStatsDClient) Count(name string, value int64, tags []string, rate float64) error {
-	args := m.Called(name, value, tags, rate)
-	return args.Error(0)
-}
-
-func (m *MockStatsDClient) Histogram(name string, value float64, tags []string, rate float64) error {
-	args := m.Called(name, value, tags, rate)
-	return args.Error(0)
-}
-
-func (m *MockStatsDClient) Distribution(name string, value float64, tags []string, rate float64) error {
-	args := m.Called(name, value, tags, rate)
-	return args.Error(0)
-}
-
-// Minimal implementations for unused methods to satisfy the interface
-func (m *MockStatsDClient) Decr(name string, tags []string, rate float64) error {
-	args := m.Called(name, tags, rate)
-	return args.Error(0)
-}
-
-func (m *MockStatsDClient) Incr(name string, tags []string, rate float64) error {
-	args := m.Called(name, tags, rate)
-	return args.Error(0)
-}
-
-func (m *MockStatsDClient) Set(name string, value string, tags []string, rate float64) error {
-	args := m.Called(name, value, tags, rate)
-	return args.Error(0)
-}
-
-func (m *MockStatsDClient) Timing(name string, value time.Duration, tags []string, rate float64) error {
-	args := m.Called(name, value, tags, rate)
-	return args.Error(0)
-}
-
-func (m *MockStatsDClient) TimeInMilliseconds(name string, value float64, tags []string, rate float64) error {
-	args := m.Called(name, value, tags, rate)
-	return args.Error(0)
-}
-
-func (m *MockStatsDClient) Event(e *statsd.Event) error {
-	args := m.Called(e)
-	return args.Error(0)
-}
-
-func (m *MockStatsDClient) SimpleEvent(title, text string) error {
-	args := m.Called(title, text)
-	return args.Error(0)
-}
-
-func (m *MockStatsDClient) ServiceCheck(sc *statsd.ServiceCheck) error {
-	args := m.Called(sc)
-	return args.Error(0)
-}
-
-func (m *MockStatsDClient) SimpleServiceCheck(name string, status statsd.ServiceCheckStatus) error {
-	args := m.Called(name, status)
-	return args.Error(0)
-}
-
-func (m *MockStatsDClient) Close() error {
-	args := m.Called()
-	return args.Error(0)
-}
-
-func (m *MockStatsDClient) Flush() error {
-	args := m.Called()
-	return args.Error(0)
-}
-
-func (m *MockStatsDClient) SetWriteTimeout(d time.Duration) error {
-	args := m.Called(d)
-	return args.Error(0)
-}
 
 func TestMonitorNew(t *testing.T) {
 	testStatsdConfig := config.StatsdConfig{
@@ -128,45 +41,48 @@ func TestMonitorIntegration(t *testing.T) {
 		name       string
 		metricType string
 		sqlQuery   string
-		setupMock  func(*MockStatsDClient)
+		setupMock  func(*mock_statsd.MockClientInterface)
 	}{
 		{
 			name:       "count-metric",
 			metricType: "count",
 			sqlQuery:   "SELECT 42 AS metric, 'us-east' AS region",
-			setupMock: func(m *MockStatsDClient) {
-				m.On("Count", "app.test.count-metric", int64(42), []string{"region:us-east"}, float64(1)).Return(nil)
+			setupMock: func(m *mock_statsd.MockClientInterface) {
+				m.EXPECT().Count("app.test.count-metric", int64(42), []string{"region:us-east"}, float64(1)).Return(nil)
 			},
 		},
 		{
 			name:       "gauge-metric",
 			metricType: "gauge",
 			sqlQuery:   "SELECT 85.5 AS metric, 'premium' AS tier",
-			setupMock: func(m *MockStatsDClient) {
-				m.On("Gauge", "app.test.gauge-metric", 85.5, []string{"tier:premium"}, float64(1)).Return(nil)
+			setupMock: func(m *mock_statsd.MockClientInterface) {
+				m.EXPECT().Gauge("app.test.gauge-metric", 85.5, []string{"tier:premium"}, float64(1)).Return(nil)
 			},
 		},
 		{
 			name:       "histogram-metric",
 			metricType: "histogram",
 			sqlQuery:   "SELECT 95.0 AS metric, 'all' AS segment",
-			setupMock: func(m *MockStatsDClient) {
-				m.On("Histogram", "app.test.histogram-metric", 95.0, []string{"segment:all"}, float64(1)).Return(nil)
+			setupMock: func(m *mock_statsd.MockClientInterface) {
+				m.EXPECT().Histogram("app.test.histogram-metric", 95.0, []string{"segment:all"}, float64(1)).Return(nil)
 			},
 		},
 		{
 			name:       "distribution-metric",
 			metricType: "distribution",
 			sqlQuery:   "SELECT 75.25 AS metric, 'baseline' AS category",
-			setupMock: func(m *MockStatsDClient) {
-				m.On("Distribution", "app.test.distribution-metric", 75.25, []string{"category:baseline"}, float64(1)).Return(nil)
+			setupMock: func(m *mock_statsd.MockClientInterface) {
+				m.EXPECT().Distribution("app.test.distribution-metric", 75.25, []string{"category:baseline"}, float64(1)).Return(nil)
 			},
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			mockStatsD := &MockStatsDClient{}
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockStatsD := mock_statsd.NewMockClientInterface(ctrl)
 			tc.setupMock(mockStatsD)
 
 			databaseConn, err := createDBConn("sqlite3", ":memory:")
@@ -188,7 +104,8 @@ func TestMonitorIntegration(t *testing.T) {
 			assert.NoError(t, err)
 			defer rows.Close()
 
-			cols, _ := rows.Columns()
+			cols, err := rows.Columns()
+			assert.NoError(t, err)
 
 			for rows.Next() {
 				rowMap, err := rowsToMap(cols, rows)
@@ -198,8 +115,6 @@ func TestMonitorIntegration(t *testing.T) {
 				err = monitor.sendMetric(rowMap, tags, false)
 				assert.NoError(t, err)
 			}
-
-			mockStatsD.AssertExpectations(t)
 		})
 	}
 }
@@ -330,21 +245,7 @@ func TestGetTags(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := getTags(tt.input)
-
-			assert.Equal(t, len(tt.expected), len(result), "Expected %d tags, got %d", len(tt.expected), len(result))
-
-			// Check that all expected tags are present (order doesn't matter)
-			expectedMap := make(map[string]bool)
-			for _, tag := range tt.expected {
-				expectedMap[tag] = true
-			}
-
-			for _, tag := range result {
-				assert.True(t, expectedMap[tag], "Unexpected tag: %s", tag)
-				delete(expectedMap, tag)
-			}
-
-			assert.Equal(t, 0, len(expectedMap), "Missing expected tags: %v", expectedMap)
+			assert.ElementsMatch(t, tt.expected, result)
 		})
 	}
 }
@@ -365,19 +266,22 @@ func TestMetricTypeHandling(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create a mock StatsD client
-			mockStatsD := &MockStatsDClient{}
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockStatsD := mock_statsd.NewMockClientInterface(ctrl)
 
 			// Set up mock expectations for valid metric types
 			if !tt.expectErr {
 				switch tt.metricType {
 				case "gauge":
-					mockStatsD.On("Gauge", "test.metric", 42.0, []string{"environment:test"}, float64(1)).Return(nil)
+					mockStatsD.EXPECT().Gauge("test.metric", 42.0, []string{"environment:test"}, float64(1)).Return(nil)
 				case "count":
-					mockStatsD.On("Count", "test.metric", int64(42), []string{"environment:test"}, float64(1)).Return(nil)
+					mockStatsD.EXPECT().Count("test.metric", int64(42), []string{"environment:test"}, float64(1)).Return(nil)
 				case "histogram":
-					mockStatsD.On("Histogram", "test.metric", 42.0, []string{"environment:test"}, float64(1)).Return(nil)
+					mockStatsD.EXPECT().Histogram("test.metric", 42.0, []string{"environment:test"}, float64(1)).Return(nil)
 				case "distribution":
-					mockStatsD.On("Distribution", "test.metric", 42.0, []string{"environment:test"}, float64(1)).Return(nil)
+					mockStatsD.EXPECT().Distribution("test.metric", 42.0, []string{"environment:test"}, float64(1)).Return(nil)
 				}
 			}
 
@@ -401,7 +305,6 @@ func TestMetricTypeHandling(t *testing.T) {
 				assert.Contains(t, err.Error(), "unknown metric type", "Error should mention unknown metric type")
 			} else {
 				assert.NoError(t, err, "Should not error for known metric type")
-				mockStatsD.AssertExpectations(t)
 			}
 		})
 	}
