@@ -86,6 +86,11 @@ func (m *Monitor) sendMetric(rowMap map[string]interface{}, tags []string, debug
 		return err
 	}
 
+	timestamp, err := getTimestamp(rowMap)
+	if err != nil {
+		return err
+	}
+
 	if debug {
 		log.Printf("DEBUG: [%s] Publishing %s metric - Name: %s, Value: %v, Tags: %v",
 			m.name, m.metricType, m.metric, metricFloat, tags)
@@ -93,13 +98,13 @@ func (m *Monitor) sendMetric(rowMap map[string]interface{}, tags []string, debug
 
 	switch m.metricType {
 	case "count":
-		return m.statsdClient.Count(m.metric, int64(metricFloat), tags, 1)
+		return m.statsdClient.CountWithTimestamp(m.metric, int64(metricFloat), tags, 1, timestamp)
 	case "histogram":
 		return m.statsdClient.Histogram(m.metric, metricFloat, tags, 1)
 	case "distribution":
 		return m.statsdClient.Distribution(m.metric, metricFloat, tags, 1)
 	case "gauge":
-		return m.statsdClient.Gauge(m.metric, metricFloat, tags, 1)
+		return m.statsdClient.GaugeWithTimestamp(m.metric, metricFloat, tags, 1, timestamp)
 	default:
 		return fmt.Errorf("unknown metric type: %s", m.metricType)
 	}
@@ -189,13 +194,13 @@ func rowsToMap(cols []string, rows *sql.Rows) (map[string]interface{}, error) {
 }
 
 // Function to aggregate tag columns
-// Assume that any column not named "metric" is a tag
+// Assume that any column not named "metric" or "timestamp" is a tag
 func getTags(results map[string]interface{}) []string {
 	var tags []string
 
 	for name, value := range results {
-		// Ignore the metric column, we only care about tags here
-		if name == "metric" {
+		// Ignore the metric and timestamp columns, we only care about tags here
+		if name == "metric" || name == "timestamp" {
 			continue
 		}
 
@@ -242,4 +247,41 @@ func getMetricFloat64(results map[string]interface{}) (float64, error) {
 	}
 
 	return metric, nil
+}
+
+// Function to pull the 'timestamp' column's value, convert, and return it as time.Time
+// If conversion isn't possible, or column is missing, this will return an error
+func getTimestamp(results map[string]interface{}) (time.Time, error) {
+	if val, ok := results["timestamp"]; ok {
+		switch v := val.(type) {
+		case time.Time:
+			return v, nil
+		case string:
+			if v == "" {
+				return time.Time{}, fmt.Errorf("failed to convert timestamp column value: empty string")
+			}
+			timestamp, err := time.Parse(time.RFC3339, v)
+			if err != nil {
+				return time.Time{}, fmt.Errorf("failed to convert timestamp column value: '%v'", val)
+			}
+			return timestamp, nil
+		case int64:
+			return time.Unix(v, 0).UTC(), nil
+		case int32:
+			return time.Unix(int64(v), 0).UTC(), nil
+		case int:
+			return time.Unix(int64(v), 0).UTC(), nil
+		case float64:
+			return time.Unix(int64(v), 0).UTC(), nil
+		case sql.NullTime:
+			if v.Valid {
+				return v.Time, nil
+			}
+			return time.Now(), nil
+		default:
+			return time.Time{}, fmt.Errorf("failed to convert timestamp column value: '%v' - unsupported type: %T", val, val)
+		}
+	} else {
+		return time.Now(), nil
+	}
 }
