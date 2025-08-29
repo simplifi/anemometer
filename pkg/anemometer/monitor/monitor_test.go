@@ -104,7 +104,8 @@ func TestMonitorIntegration(t *testing.T) {
 			assert.NoError(t, err)
 			defer rows.Close()
 
-			cols, _ := rows.Columns()
+			cols, err := rows.Columns()
+			assert.NoError(t, err)
 
 			for rows.Next() {
 				rowMap, err := rowsToMap(cols, rows)
