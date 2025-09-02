@@ -39,7 +39,8 @@ func TestMonitorNew(t *testing.T) {
 
 // Comprehensive integration test using SQLite + Mock StatsD
 func TestMonitorIntegration(t *testing.T) {
-	// Test different metric types
+	expectedTime := time.Date(2023, 12, 25, 10, 30, 0, 0, time.UTC)
+	expectedTimeString := expectedTime.Format(time.RFC3339)
 	testCases := []struct {
 		name       string
 		metricType string
@@ -76,6 +77,38 @@ func TestMonitorIntegration(t *testing.T) {
 			sqlQuery:   "SELECT 75.25 AS metric, 'baseline' AS category",
 			setupMock: func(m *mock_statsd.MockClientInterface) {
 				m.EXPECT().Distribution("app.test.distribution-metric", 75.25, []string{"category:baseline"}, float64(1)).Return(nil)
+			},
+		},
+		{
+			name:       "count-with-explicit-timestamp",
+			metricType: "count",
+			sqlQuery:   fmt.Sprintf("SELECT 100 AS metric, '%s' AS timestamp, 'prod' AS environment", expectedTimeString),
+			setupMock: func(m *mock_statsd.MockClientInterface) {
+				m.EXPECT().CountWithTimestamp("app.test.count-with-explicit-timestamp", int64(100), []string{"environment:prod"}, float64(1), expectedTime).Return(nil)
+			},
+		},
+		{
+			name:       "gauge-with-explicit-timestamp",
+			metricType: "gauge",
+			sqlQuery:   fmt.Sprintf("SELECT 75.5 AS metric, '%s' AS timestamp, 'staging' AS environment", expectedTimeString),
+			setupMock: func(m *mock_statsd.MockClientInterface) {
+				m.EXPECT().GaugeWithTimestamp("app.test.gauge-with-explicit-timestamp", 75.5, []string{"environment:staging"}, float64(1), expectedTime).Return(nil)
+			},
+		},
+		{
+			name:       "count-without-timestamp-uses-now",
+			metricType: "count",
+			sqlQuery:   "SELECT 50 AS metric, 'dev' AS environment",
+			setupMock: func(m *mock_statsd.MockClientInterface) {
+				m.EXPECT().CountWithTimestamp("app.test.count-without-timestamp-uses-now", int64(50), []string{"environment:dev"}, float64(1), gomock.Any()).Return(nil)
+			},
+		},
+		{
+			name:       "gauge-without-timestamp-uses-now",
+			metricType: "gauge",
+			sqlQuery:   "SELECT 25.25 AS metric, 'test' AS environment",
+			setupMock: func(m *mock_statsd.MockClientInterface) {
+				m.EXPECT().GaugeWithTimestamp("app.test.gauge-without-timestamp-uses-now", 25.25, []string{"environment:test"}, float64(1), gomock.Any()).Return(nil)
 			},
 		},
 	}
@@ -434,92 +467,6 @@ func TestGetTimestamp(t *testing.T) {
 				assert.True(t, timeDiff < time.Second, "Timestamp should be close to now, got %v", result)
 			} else {
 				assert.Equal(t, tt.expected, result, "Expected %v, got %v", tt.expected, result)
-			}
-		})
-	}
-}
-
-// Test timestamp-specific functionality with integration tests
-func TestMonitorIntegrationWithTimestamp(t *testing.T) {
-	expectedTime := time.Date(2023, 12, 25, 10, 30, 0, 0, time.UTC)
-	expectedTimeString := expectedTime.Format(time.RFC3339)
-
-	testCases := []struct {
-		name       string
-		metricType string
-		sqlQuery   string
-		setupMock  func(*mock_statsd.MockClientInterface)
-	}{
-		{
-			name:       "count-with-explicit-timestamp",
-			metricType: "count",
-			sqlQuery:   fmt.Sprintf("SELECT 100 AS metric, '%s' AS timestamp, 'prod' AS environment", expectedTimeString),
-			setupMock: func(m *mock_statsd.MockClientInterface) {
-				m.EXPECT().CountWithTimestamp("app.test.count-with-explicit-timestamp", int64(100), []string{"environment:prod"}, float64(1), expectedTime).Return(nil)
-			},
-		},
-		{
-			name:       "gauge-with-explicit-timestamp",
-			metricType: "gauge",
-			sqlQuery:   fmt.Sprintf("SELECT 75.5 AS metric, '%s' AS timestamp, 'staging' AS environment", expectedTimeString),
-			setupMock: func(m *mock_statsd.MockClientInterface) {
-				m.EXPECT().GaugeWithTimestamp("app.test.gauge-with-explicit-timestamp", 75.5, []string{"environment:staging"}, float64(1), expectedTime).Return(nil)
-			},
-		},
-		{
-			name:       "count-without-timestamp-uses-now",
-			metricType: "count",
-			sqlQuery:   "SELECT 50 AS metric, 'dev' AS environment",
-			setupMock: func(m *mock_statsd.MockClientInterface) {
-				m.EXPECT().CountWithTimestamp("app.test.count-without-timestamp-uses-now", int64(50), []string{"environment:dev"}, float64(1), gomock.Any()).Return(nil)
-			},
-		},
-		{
-			name:       "gauge-without-timestamp-uses-now",
-			metricType: "gauge",
-			sqlQuery:   "SELECT 25.25 AS metric, 'test' AS environment",
-			setupMock: func(m *mock_statsd.MockClientInterface) {
-				m.EXPECT().GaugeWithTimestamp("app.test.gauge-without-timestamp-uses-now", 25.25, []string{"environment:test"}, float64(1), gomock.Any()).Return(nil)
-			},
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			ctrl := gomock.NewController(t)
-			defer ctrl.Finish()
-
-			mockStatsD := mock_statsd.NewMockClientInterface(ctrl)
-			tc.setupMock(mockStatsD)
-
-			databaseConn, err := createDBConn("sqlite3", ":memory:")
-			assert.NoError(t, err)
-			defer databaseConn.Close()
-
-			monitor := &Monitor{
-				databaseConn:  databaseConn,
-				statsdClient:  mockStatsD,
-				name:          tc.name,
-				sleepDuration: 100,
-				metric:        "app.test." + tc.name,
-				metricType:    tc.metricType,
-				sql:           tc.sqlQuery,
-			}
-
-			// Execute query and send metric (simulates one monitor cycle)
-			rows, err := monitor.databaseConn.Query(monitor.sql)
-			assert.NoError(t, err)
-			defer rows.Close()
-
-			cols, _ := rows.Columns()
-
-			for rows.Next() {
-				rowMap, err := rowsToMap(cols, rows)
-				assert.NoError(t, err)
-
-				tags := getTags(rowMap)
-				err = monitor.sendMetric(rowMap, tags, false)
-				assert.NoError(t, err)
 			}
 		})
 	}
