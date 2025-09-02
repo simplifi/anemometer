@@ -125,6 +125,7 @@ Anemometer makes the following assumptions about the results of your query:
 
 - Exactly one column will be named `metric`, and the value is convertable to
   `float64` (no strings)
+- An optional column named `timestamp` can be included to explicitly provide a timestamp for the metrics (only supported for `gauge` and `count` types)
 - All other columns will be aggregated into tags and sent to StatsD
 - The tags will take the form of `column_name:value`
 
@@ -139,6 +140,7 @@ type using the `metric_type` configuration option:
   queue depth)
 - **Configuration**: `metric_type: gauge` (or omit for default)
 - **StatsD format**: `metric_name:value|g|#tags`
+- **Timestamp support**: ✅ Supports optional `timestamp` column
 
 ### Count
 
@@ -147,6 +149,7 @@ type using the `metric_type` configuration option:
 - **Configuration**: `metric_type: count`
 - **StatsD format**: `metric_name:value|c|#tags`
 - **Note**: Values are converted to integers
+- **Timestamp support**: ✅ Supports optional `timestamp` column
 
 ### Histogram
 
@@ -154,6 +157,7 @@ type using the `metric_type` configuration option:
   request latency, file sizes)
 - **Configuration**: `metric_type: histogram`
 - **StatsD format**: `metric_name:value|h|#tags`
+- **Timestamp support**: ❌ Uses current time only
 
 ### Distribution
 
@@ -161,10 +165,37 @@ type using the `metric_type` configuration option:
   infrastructure (e.g., request latency across all hosts)
 - **Configuration**: `metric_type: distribution`
 - **StatsD format**: `metric_name:value|d|#tags`
+- **Timestamp support**: ❌ Uses current time only
 
 **Note**: The `metric_type` field is optional and defaults to `gauge` for
 backwards compatibility. Existing configurations will continue to work without
 any changes.
+
+## Timestamp Support
+
+Anemometer supports custom timestamps for `gauge` and `count` metrics by including an optional `timestamp` column in your SQL query results. This allows you to send metrics with specific timestamps rather than using the current time.
+
+### Supported timestamp formats:
+
+- **RFC3339 strings**: `"2023-12-25T10:30:00Z"`
+- **Unix timestamps**: `1703505000` (as `int64`, `int32`, `int`, or `float64`)
+- **Database time objects**: Direct `time.Time` or `sql.NullTime` values
+
+### Example with timestamp:
+
+```sql
+SELECT 'production' AS environment,
+       COUNT(*) AS metric,
+       '2023-12-25T10:30:00Z' AS timestamp
+FROM   users
+WHERE  created_at BETWEEN '2023-12-25 00:00:00' AND '2023-12-25 23:59:59'
+```
+
+### Important Datadog considerations:
+
+⚠️ **Historical Data Limitations**: By default, Datadog will reject metrics with timestamps older than 4 hours from the current time. To send historical metrics, you need to enable "Allow metrics with timestamps in past" in your Datadog organization settings.
+
+📖 For more information, see [Datadog's documentation on historical metric in gestion](https://docs.datadoghq.com/metrics/custom_metrics/historical_metrics/).
 
 ### Query Example
 

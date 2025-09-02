@@ -1,7 +1,10 @@
 package monitor
 
 import (
+	"database/sql"
+	"fmt"
 	"testing"
+	"time"
 
 	mock_statsd "github.com/DataDog/datadog-go/v5/statsd/mocks"
 	"github.com/golang/mock/gomock"
@@ -36,7 +39,8 @@ func TestMonitorNew(t *testing.T) {
 
 // Comprehensive integration test using SQLite + Mock StatsD
 func TestMonitorIntegration(t *testing.T) {
-	// Test different metric types
+	expectedTime := time.Date(2023, 12, 25, 10, 30, 0, 0, time.UTC)
+	expectedTimeString := expectedTime.Format(time.RFC3339)
 	testCases := []struct {
 		name       string
 		metricType string
@@ -48,7 +52,7 @@ func TestMonitorIntegration(t *testing.T) {
 			metricType: "count",
 			sqlQuery:   "SELECT 42 AS metric, 'us-east' AS region",
 			setupMock: func(m *mock_statsd.MockClientInterface) {
-				m.EXPECT().Count("app.test.count-metric", int64(42), []string{"region:us-east"}, float64(1)).Return(nil)
+				m.EXPECT().CountWithTimestamp("app.test.count-metric", int64(42), []string{"region:us-east"}, float64(1), gomock.Any()).Return(nil)
 			},
 		},
 		{
@@ -56,7 +60,7 @@ func TestMonitorIntegration(t *testing.T) {
 			metricType: "gauge",
 			sqlQuery:   "SELECT 85.5 AS metric, 'premium' AS tier",
 			setupMock: func(m *mock_statsd.MockClientInterface) {
-				m.EXPECT().Gauge("app.test.gauge-metric", 85.5, []string{"tier:premium"}, float64(1)).Return(nil)
+				m.EXPECT().GaugeWithTimestamp("app.test.gauge-metric", 85.5, []string{"tier:premium"}, float64(1), gomock.Any()).Return(nil)
 			},
 		},
 		{
@@ -73,6 +77,38 @@ func TestMonitorIntegration(t *testing.T) {
 			sqlQuery:   "SELECT 75.25 AS metric, 'baseline' AS category",
 			setupMock: func(m *mock_statsd.MockClientInterface) {
 				m.EXPECT().Distribution("app.test.distribution-metric", 75.25, []string{"category:baseline"}, float64(1)).Return(nil)
+			},
+		},
+		{
+			name:       "count-with-explicit-timestamp",
+			metricType: "count",
+			sqlQuery:   fmt.Sprintf("SELECT 100 AS metric, '%s' AS timestamp, 'prod' AS environment", expectedTimeString),
+			setupMock: func(m *mock_statsd.MockClientInterface) {
+				m.EXPECT().CountWithTimestamp("app.test.count-with-explicit-timestamp", int64(100), []string{"environment:prod"}, float64(1), expectedTime).Return(nil)
+			},
+		},
+		{
+			name:       "gauge-with-explicit-timestamp",
+			metricType: "gauge",
+			sqlQuery:   fmt.Sprintf("SELECT 75.5 AS metric, '%s' AS timestamp, 'staging' AS environment", expectedTimeString),
+			setupMock: func(m *mock_statsd.MockClientInterface) {
+				m.EXPECT().GaugeWithTimestamp("app.test.gauge-with-explicit-timestamp", 75.5, []string{"environment:staging"}, float64(1), expectedTime).Return(nil)
+			},
+		},
+		{
+			name:       "count-without-timestamp-uses-now",
+			metricType: "count",
+			sqlQuery:   "SELECT 50 AS metric, 'dev' AS environment",
+			setupMock: func(m *mock_statsd.MockClientInterface) {
+				m.EXPECT().CountWithTimestamp("app.test.count-without-timestamp-uses-now", int64(50), []string{"environment:dev"}, float64(1), gomock.Any()).Return(nil)
+			},
+		},
+		{
+			name:       "gauge-without-timestamp-uses-now",
+			metricType: "gauge",
+			sqlQuery:   "SELECT 25.25 AS metric, 'test' AS environment",
+			setupMock: func(m *mock_statsd.MockClientInterface) {
+				m.EXPECT().GaugeWithTimestamp("app.test.gauge-without-timestamp-uses-now", 25.25, []string{"environment:test"}, float64(1), gomock.Any()).Return(nil)
 			},
 		},
 	}
@@ -250,6 +286,192 @@ func TestGetTags(t *testing.T) {
 	}
 }
 
+func TestGetTimestamp(t *testing.T) {
+	// Fixed timestamp for testing
+	expectedTime := time.Date(2023, 12, 25, 10, 30, 0, 0, time.UTC)
+	expectedTimeString := expectedTime.Format(time.RFC3339)
+	unixTimestamp := expectedTime.Unix()
+
+	tests := []struct {
+		name     string
+		input    map[string]interface{}
+		expected time.Time
+		hasError bool
+	}{
+		// String timestamp tests
+		{
+			name: "valid_rfc3339_timestamp_string",
+			input: map[string]interface{}{
+				"metric":    42,
+				"timestamp": expectedTimeString,
+			},
+			expected: expectedTime,
+			hasError: false,
+		},
+		{
+			name: "empty_timestamp_string",
+			input: map[string]interface{}{
+				"metric":    42,
+				"timestamp": "",
+			},
+			expected: time.Time{},
+			hasError: true,
+		},
+		{
+			name: "invalid_timestamp_format_string",
+			input: map[string]interface{}{
+				"metric":    42,
+				"timestamp": "2023-12-25 10:30:00", // Not RFC3339
+			},
+			expected: time.Time{},
+			hasError: true,
+		},
+
+		// time.Time timestamp tests
+		{
+			name: "actual_time_type",
+			input: map[string]interface{}{
+				"metric":    42,
+				"timestamp": expectedTime,
+			},
+			expected: expectedTime,
+			hasError: false,
+		},
+
+		// int64 unix timestamp tests
+		{
+			name: "unix_timestamp_int64",
+			input: map[string]interface{}{
+				"metric":    42,
+				"timestamp": unixTimestamp,
+			},
+			expected: time.Unix(unixTimestamp, 0).UTC(),
+			hasError: false,
+		},
+		{
+			name: "zero_unix_timestamp",
+			input: map[string]interface{}{
+				"metric":    42,
+				"timestamp": int64(0),
+			},
+			expected: time.Unix(0, 0).UTC(),
+			hasError: false,
+		},
+
+		// sql.NullTime tests
+		{
+			name: "valid_null_time",
+			input: map[string]interface{}{
+				"metric":    42,
+				"timestamp": sql.NullTime{Time: expectedTime, Valid: true},
+			},
+			expected: expectedTime,
+			hasError: false,
+		},
+		{
+			name: "invalid_null_time_uses_now",
+			input: map[string]interface{}{
+				"metric":    42,
+				"timestamp": sql.NullTime{Time: time.Time{}, Valid: false},
+			},
+			expected: time.Time{}, // We'll check this is close to time.Now()
+			hasError: false,
+		},
+
+		// Numeric unix timestamp tests
+		{
+			name: "unix_timestamp_int32",
+			input: map[string]interface{}{
+				"metric":    42,
+				"timestamp": int32(unixTimestamp),
+			},
+			expected: time.Unix(unixTimestamp, 0).UTC(),
+			hasError: false,
+		},
+		{
+			name: "unix_timestamp_int",
+			input: map[string]interface{}{
+				"metric":    42,
+				"timestamp": int(unixTimestamp),
+			},
+			expected: time.Unix(unixTimestamp, 0).UTC(),
+			hasError: false,
+		},
+		{
+			name: "unix_timestamp_float64",
+			input: map[string]interface{}{
+				"metric":    42,
+				"timestamp": float64(unixTimestamp),
+			},
+			expected: time.Unix(unixTimestamp, 0).UTC(),
+			hasError: false,
+		},
+		// Truly unsupported type tests
+		{
+			name: "unsupported_type_float32",
+			input: map[string]interface{}{
+				"metric":    42,
+				"timestamp": float32(unixTimestamp),
+			},
+			expected: time.Time{},
+			hasError: true,
+		},
+		{
+			name: "unsupported_type_bool",
+			input: map[string]interface{}{
+				"metric":    42,
+				"timestamp": true,
+			},
+			expected: time.Time{},
+			hasError: true,
+		},
+		{
+			name: "unsupported_type_slice",
+			input: map[string]interface{}{
+				"metric":    42,
+				"timestamp": []int{1, 2, 3},
+			},
+			expected: time.Time{},
+			hasError: true,
+		},
+
+		// Missing timestamp column
+		{
+			name: "missing_timestamp_column_uses_now",
+			input: map[string]interface{}{
+				"metric": 42,
+			},
+			expected: time.Time{}, // We'll check this is close to time.Now()
+			hasError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := getTimestamp(tt.input)
+
+			if tt.hasError {
+				assert.Error(t, err, "Expected error but got none")
+				return
+			}
+
+			assert.NoError(t, err, "Unexpected error: %v", err)
+
+			if tt.name == "missing_timestamp_column_uses_now" || tt.name == "invalid_null_time_uses_now" {
+				// Check that the timestamp is close to now (within 1 second)
+				now := time.Now()
+				timeDiff := now.Sub(result)
+				if timeDiff < 0 {
+					timeDiff = -timeDiff
+				}
+				assert.True(t, timeDiff < time.Second, "Timestamp should be close to now, got %v", result)
+			} else {
+				assert.Equal(t, tt.expected, result, "Expected %v, got %v", tt.expected, result)
+			}
+		})
+	}
+}
+
 func TestMetricTypeHandling(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -275,9 +497,9 @@ func TestMetricTypeHandling(t *testing.T) {
 			if !tt.expectErr {
 				switch tt.metricType {
 				case "gauge":
-					mockStatsD.EXPECT().Gauge("test.metric", 42.0, []string{"environment:test"}, float64(1)).Return(nil)
+					mockStatsD.EXPECT().GaugeWithTimestamp("test.metric", 42.0, []string{"environment:test"}, float64(1), gomock.Any()).Return(nil)
 				case "count":
-					mockStatsD.EXPECT().Count("test.metric", int64(42), []string{"environment:test"}, float64(1)).Return(nil)
+					mockStatsD.EXPECT().CountWithTimestamp("test.metric", int64(42), []string{"environment:test"}, float64(1), gomock.Any()).Return(nil)
 				case "histogram":
 					mockStatsD.EXPECT().Histogram("test.metric", 42.0, []string{"environment:test"}, float64(1)).Return(nil)
 				case "distribution":
