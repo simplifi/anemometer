@@ -5,7 +5,7 @@ go 1.24.0
 toolchain go1.24.2
 
 require (
-	github.com/DataDog/datadog-go/v5 v5.7.1
+	github.com/DataDog/datadog-go/v5 v5.8.0
 	github.com/golang/mock v1.6.0
 	github.com/lib/pq v1.10.9
 	github.com/mattn/go-sqlite3 v1.14.32
