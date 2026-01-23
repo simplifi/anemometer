@@ -8,7 +8,7 @@ require (
 	github.com/DataDog/datadog-go/v5 v5.8.1
 	github.com/golang/mock v1.6.0
 	github.com/lib/pq v1.10.9
-	github.com/mattn/go-sqlite3 v1.14.32
+	github.com/mattn/go-sqlite3 v1.14.33
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.11.1
