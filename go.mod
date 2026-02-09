@@ -12,7 +12,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.11.1
-	github.com/vertica/vertica-sql-go v1.3.4
+	github.com/vertica/vertica-sql-go v1.3.5
 	github.com/viant/bigquery v0.5.1
 )
 
