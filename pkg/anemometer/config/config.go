@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
@@ -54,7 +55,26 @@ type MonitorConfig struct {
 	SleepDuration  int            `mapstructure:"sleep_duration"`
 	Metric         string         `mapstructure:"metric"`
 	MetricType     string         `mapstructure:"metric_type"`
+	EventConfig    EventConfig    `mapstructure:"event"`
 	SQL            string         `mapstructure:"sql"`
+}
+
+// EventConfig holds Datadog event-specific configuration for a monitor
+type EventConfig struct {
+	Enabled              bool     `mapstructure:"enabled"`
+	Title                string   `mapstructure:"title"`
+	TitleColumn          string   `mapstructure:"title_column"`
+	Text                 string   `mapstructure:"text"`
+	TextColumn           string   `mapstructure:"text_column"`
+	AlertType            string   `mapstructure:"alert_type"`
+	Priority             string   `mapstructure:"priority"`
+	SourceTypeName       string   `mapstructure:"source_type_name"`
+	AggregationKey       string   `mapstructure:"aggregation_key"`
+	AggregationKeyColumn string   `mapstructure:"aggregation_key_column"`
+	Hostname             string   `mapstructure:"hostname"`
+	HostnameColumn       string   `mapstructure:"hostname_column"`
+	Tags                 []string `mapstructure:"tags"`
+	TagColumns           []string `mapstructure:"tag_columns"`
 }
 
 // Read a config file and return a Config
@@ -84,7 +104,49 @@ func Read(configPath string) (*Config, error) {
 		} else {
 			config.Monitors[i].MetricType = strings.ToLower(config.Monitors[i].MetricType)
 		}
+
+		if config.Monitors[i].EventConfig.Enabled {
+			normalizeEventConfig(&config.Monitors[i].EventConfig)
+
+			if err := validateEventConfig(config.Monitors[i].EventConfig); err != nil {
+				return nil, fmt.Errorf("monitor %q: %w", config.Monitors[i].Name, err)
+			}
+		}
 	}
 
 	return config, nil
+}
+
+func normalizeEventConfig(eventConfig *EventConfig) {
+	if eventConfig.AlertType == "" {
+		eventConfig.AlertType = "info"
+	} else {
+		eventConfig.AlertType = strings.ToLower(eventConfig.AlertType)
+	}
+
+	if eventConfig.Priority == "" {
+		eventConfig.Priority = "normal"
+	} else {
+		eventConfig.Priority = strings.ToLower(eventConfig.Priority)
+	}
+
+	if eventConfig.SourceTypeName == "" {
+		eventConfig.SourceTypeName = "anemometer"
+	}
+}
+
+func validateEventConfig(eventConfig EventConfig) error {
+	switch eventConfig.AlertType {
+	case "info", "warning", "error", "success":
+	default:
+		return fmt.Errorf("unknown event alert type: %s", eventConfig.AlertType)
+	}
+
+	switch eventConfig.Priority {
+	case "normal", "low":
+	default:
+		return fmt.Errorf("unknown event priority: %s", eventConfig.Priority)
+	}
+
+	return nil
 }
