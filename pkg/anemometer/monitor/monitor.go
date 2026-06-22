@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/DataDog/datadog-go/v5/statsd"
@@ -22,11 +23,23 @@ type Monitor struct {
 	sleepDuration int
 	metric        string
 	metricType    string
-	sql           string
+	eventConfig   config.EventConfig
+	// Computed once per monitor because it is used for every returned row.
+	metricExcludedColumns map[string]struct{}
+	sql                   string
 }
 
 // New Monitor, pass in the MonitorConfig
 func New(statsdConfig config.StatsdConfig, monitorConfig config.MonitorConfig) (*Monitor, error) {
+	if monitorConfig.EventConfig.Enabled {
+		if _, err := getEventAlertType(monitorConfig.EventConfig.AlertType); err != nil {
+			return nil, err
+		}
+		if _, err := getEventPriority(monitorConfig.EventConfig.Priority); err != nil {
+			return nil, err
+		}
+	}
+
 	databaseConn, err := createDBConn(monitorConfig.DatabaseConfig.Type, monitorConfig.DatabaseConfig.URI)
 	if err != nil {
 		return nil, err
@@ -41,13 +54,15 @@ func New(statsdConfig config.StatsdConfig, monitorConfig config.MonitorConfig) (
 	}
 
 	monitor := Monitor{
-		databaseConn:  databaseConn,
-		statsdClient:  statsdClient,
-		name:          monitorConfig.Name,
-		sleepDuration: monitorConfig.SleepDuration,
-		metric:        monitorConfig.Metric,
-		metricType:    monitorConfig.MetricType,
-		sql:           monitorConfig.SQL,
+		databaseConn:          databaseConn,
+		statsdClient:          statsdClient,
+		name:                  monitorConfig.Name,
+		sleepDuration:         monitorConfig.SleepDuration,
+		metric:                monitorConfig.Metric,
+		metricType:            monitorConfig.MetricType,
+		eventConfig:           monitorConfig.EventConfig,
+		metricExcludedColumns: newMetricExcludedColumns(monitorConfig.EventConfig),
+		sql:                   monitorConfig.SQL,
 	}
 
 	return &monitor, nil
@@ -110,48 +125,129 @@ func (m *Monitor) sendMetric(rowMap map[string]interface{}, tags []string, debug
 	}
 }
 
+// sendEvent sends a Datadog event built from the configured event columns.
+func (m *Monitor) sendEvent(rowMap map[string]interface{}, tags []string, debug bool) error {
+	if !m.eventConfig.Enabled {
+		return nil
+	}
+
+	title, err := getEventField(rowMap, m.eventConfig.TitleColumn, m.eventConfig.Title, m.name, true)
+	if err != nil {
+		return err
+	}
+
+	text, err := getEventField(rowMap, m.eventConfig.TextColumn, m.eventConfig.Text, "", false)
+	if err != nil {
+		return err
+	}
+
+	alertType, err := getEventAlertType(m.eventConfig.AlertType)
+	if err != nil {
+		return err
+	}
+
+	priority, err := getEventPriority(m.eventConfig.Priority)
+	if err != nil {
+		return err
+	}
+
+	event := statsd.NewEvent(title, text)
+	event.AlertType = alertType
+	event.Priority = priority
+	event.SourceTypeName = m.eventConfig.SourceTypeName
+	event.Tags = tags
+
+	aggregationKey, err := getEventField(rowMap, m.eventConfig.AggregationKeyColumn, m.eventConfig.AggregationKey, "", false)
+	if err != nil {
+		return err
+	}
+	event.AggregationKey = aggregationKey
+
+	hostname, err := getEventField(rowMap, m.eventConfig.HostnameColumn, m.eventConfig.Hostname, "", false)
+	if err != nil {
+		return err
+	}
+	event.Hostname = hostname
+
+	if debug {
+		log.Printf("DEBUG: [%s] Publishing event - Title: %s, AlertType: %s, Priority: %s, Tags: %v",
+			m.name, event.Title, event.AlertType, event.Priority, event.Tags)
+	}
+
+	return m.statsdClient.Event(event)
+}
+
 // Start the Monitor
 func (m *Monitor) Start(debug bool) {
 	for {
 		log.Printf("INFO: [%s] Sleeping for %d seconds", m.name, m.sleepDuration)
 		time.Sleep(time.Duration(m.sleepDuration) * time.Second)
 
-		// Execute our query
-		rows, err := m.databaseConn.Query(m.sql)
+		m.runOnce(debug)
+	}
+}
+
+func (m *Monitor) runOnce(debug bool) {
+	rows, err := m.databaseConn.Query(m.sql)
+	if err != nil {
+		log.Printf("ERROR: [%s] %v", m.name, err)
+		sendErrorMetric(m.statsdClient, m.name)
+		return
+	}
+	defer func() {
+		if err := rows.Close(); err != nil {
+			log.Printf("ERROR: [%s] %v", m.name, err)
+			sendErrorMetric(m.statsdClient, m.name)
+		}
+	}()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		log.Printf("ERROR: [%s] %v", m.name, err)
+		sendErrorMetric(m.statsdClient, m.name)
+		return
+	}
+
+	// Iterate on the resulting rows
+	for rows.Next() {
+		// Convert our result row into a map
+		rowMap, err := rowsToMap(cols, rows)
 		if err != nil {
 			log.Printf("ERROR: [%s] %v", m.name, err)
 			sendErrorMetric(m.statsdClient, m.name)
 			continue
 		}
 
-		cols, err := rows.Columns()
-		if err != nil {
-			log.Printf("ERROR: [%s] %v", m.name, err)
-			sendErrorMetric(m.statsdClient, m.name)
-			continue
-		}
+		m.processRow(rowMap, debug)
+	}
 
-		// Iterate on the resulting rows
-		for rows.Next() {
+	if err := rows.Err(); err != nil {
+		log.Printf("ERROR: [%s] %v", m.name, err)
+		sendErrorMetric(m.statsdClient, m.name)
+	}
+}
 
-			// Convert our result row into a map
-			rowMap, err := rowsToMap(cols, rows)
-			if err != nil {
-				log.Printf("ERROR: [%s] %v", m.name, err)
-				sendErrorMetric(m.statsdClient, m.name)
-				continue
-			}
+func (m *Monitor) processRow(rowMap map[string]interface{}, debug bool) {
+	// Send the metric to Datadog using the configured metric type.
+	if err := m.sendMetric(rowMap, m.getMetricTags(rowMap), debug); err != nil {
+		log.Printf("ERROR: [%s] %v", m.name, err)
+		sendErrorMetric(m.statsdClient, m.name)
+	}
 
-			// Aggregate all the tags from the query
-			tags := getTags(rowMap)
+	if !m.eventConfig.Enabled {
+		return
+	}
 
-			// Send the metric to Datadog using the configured metric type
-			if err = m.sendMetric(rowMap, tags, debug); err != nil {
-				log.Printf("ERROR: [%s] %v", m.name, err)
-				sendErrorMetric(m.statsdClient, m.name)
-			}
-		}
+	eventTags, err := m.getEventTags(rowMap)
+	if err != nil {
+		log.Printf("ERROR: [%s] %v", m.name, err)
+		sendErrorMetric(m.statsdClient, m.name)
+		return
+	}
 
+	if err = m.sendEvent(rowMap, eventTags, debug); err != nil {
+		log.Printf("ERROR: [%s] %v", m.name, err)
+		sendErrorMetric(m.statsdClient, m.name)
 	}
 }
 
@@ -196,11 +292,81 @@ func rowsToMap(cols []string, rows *sql.Rows) (map[string]interface{}, error) {
 // Function to aggregate tag columns
 // Assume that any column not named "metric" or "timestamp" is a tag
 func getTags(results map[string]interface{}) []string {
+	return getTagsExcluding(results, reservedMetricColumns())
+}
+
+func (m *Monitor) getMetricTags(results map[string]interface{}) []string {
+	excludedColumns := m.metricExcludedColumns
+	if excludedColumns == nil {
+		excludedColumns = newMetricExcludedColumns(m.eventConfig)
+	}
+
+	return getTagsExcluding(results, excludedColumns)
+}
+
+func (m *Monitor) getEventTags(results map[string]interface{}) ([]string, error) {
+	tags := make([]string, 0, len(m.eventConfig.Tags)+len(m.eventConfig.TagColumns))
+	tags = append(tags, m.eventConfig.Tags...)
+
+	for _, column := range m.eventConfig.TagColumns {
+		value, ok := getColumnString(results, column)
+		if !ok {
+			return nil, fmt.Errorf("event tag column not found: %s", column)
+		}
+
+		tags = append(tags, fmt.Sprintf("%v:%v", column, value))
+	}
+
+	return tags, nil
+}
+
+func reservedMetricColumns() map[string]struct{} {
+	return map[string]struct{}{
+		"metric":    {},
+		"timestamp": {},
+	}
+}
+
+func newMetricExcludedColumns(eventConfig config.EventConfig) map[string]struct{} {
+	excludedColumns := reservedMetricColumns()
+
+	if eventConfig.Enabled {
+		for _, name := range eventMetricExcludedColumns(eventConfig) {
+			excludedColumns[name] = struct{}{}
+		}
+	}
+
+	return excludedColumns
+}
+
+func eventMetricExcludedColumns(eventConfig config.EventConfig) []string {
+	columns := []string{
+		"event_title",
+		"event_text",
+		"event_aggregation_key",
+		"event_hostname",
+	}
+
+	for _, column := range []string{
+		eventConfig.TitleColumn,
+		eventConfig.TextColumn,
+		eventConfig.AggregationKeyColumn,
+		eventConfig.HostnameColumn,
+	} {
+		if column != "" {
+			columns = append(columns, column)
+		}
+	}
+
+	return columns
+}
+
+func getTagsExcluding(results map[string]interface{}, excludedColumns map[string]struct{}) []string {
 	var tags []string
 
 	for name, value := range results {
 		// Ignore the metric and timestamp columns, we only care about tags here
-		if name == "metric" || name == "timestamp" {
+		if _, ok := excludedColumns[name]; ok {
 			continue
 		}
 
@@ -209,6 +375,81 @@ func getTags(results map[string]interface{}) []string {
 	}
 
 	return tags
+}
+
+func getEventField(results map[string]interface{}, column string, fallback string, defaultValue string, required bool) (string, error) {
+	if column != "" {
+		value, ok := getColumnString(results, column)
+		if !ok {
+			return "", fmt.Errorf("event column not found: %s", column)
+		}
+
+		if value != "" {
+			return value, nil
+		}
+	}
+
+	if fallback != "" {
+		return fallback, nil
+	}
+
+	if defaultValue != "" {
+		return defaultValue, nil
+	}
+
+	if required {
+		return "", fmt.Errorf("event title is required")
+	}
+
+	return "", nil
+}
+
+func getColumnString(results map[string]interface{}, column string) (string, bool) {
+	value, ok := results[column]
+	if !ok {
+		return "", false
+	}
+
+	if value == nil {
+		return "", true
+	}
+
+	switch v := value.(type) {
+	case string:
+		return v, true
+	case []byte:
+		return string(v), true
+	case time.Time:
+		return v.Format(time.RFC3339), true
+	default:
+		return fmt.Sprintf("%v", v), true
+	}
+}
+
+func getEventAlertType(alertType string) (statsd.EventAlertType, error) {
+	switch strings.ToLower(alertType) {
+	case "", "info":
+		return statsd.Info, nil
+	case "error":
+		return statsd.Error, nil
+	case "warning":
+		return statsd.Warning, nil
+	case "success":
+		return statsd.Success, nil
+	default:
+		return "", fmt.Errorf("unknown event alert type: %s", alertType)
+	}
+}
+
+func getEventPriority(priority string) (statsd.EventPriority, error) {
+	switch strings.ToLower(priority) {
+	case "", "normal":
+		return statsd.Normal, nil
+	case "low":
+		return statsd.Low, nil
+	default:
+		return "", fmt.Errorf("unknown event priority: %s", priority)
+	}
 }
 
 // Function to pull the 'metric' column's value, convert, and return it as float64

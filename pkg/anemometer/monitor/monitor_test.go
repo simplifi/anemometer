@@ -3,9 +3,11 @@ package monitor
 import (
 	"database/sql"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
+	"github.com/DataDog/datadog-go/v5/statsd"
 	mock_statsd "github.com/DataDog/datadog-go/v5/statsd/mocks"
 	"github.com/golang/mock/gomock"
 	_ "github.com/mattn/go-sqlite3"
@@ -135,22 +137,153 @@ func TestMonitorIntegration(t *testing.T) {
 				sql:           tc.sqlQuery,
 			}
 
-			// Execute query and send metric (simulates one monitor cycle)
-			rows, err := monitor.databaseConn.Query(monitor.sql)
-			assert.NoError(t, err)
-			defer rows.Close()
+			monitor.runOnce(false)
+		})
+	}
+}
 
-			cols, err := rows.Columns()
-			assert.NoError(t, err)
+func TestMonitorIntegrationWithEvent(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
 
-			for rows.Next() {
-				rowMap, err := rowsToMap(cols, rows)
-				assert.NoError(t, err)
+	mockStatsD := mock_statsd.NewMockClientInterface(ctrl)
+	mockStatsD.EXPECT().GaugeWithTimestamp(
+		"postgres.long_running_query",
+		1.0,
+		stringSliceMatcher{expected: []string{"database_name:analytics", "duration_bucket:2h_plus"}},
+		float64(1),
+		gomock.Any(),
+	).Return(nil)
+	mockStatsD.EXPECT().Event(statsdEventMatcher{
+		expected: statsd.Event{
+			Title:          "Long running Postgres query",
+			Text:           "Database: analytics\nUser: reporting_user\nPID: 41273",
+			AggregationKey: "postgres-long-running-query:analytics:41273",
+			Priority:       statsd.Normal,
+			SourceTypeName: "anemometer",
+			AlertType:      statsd.Warning,
+			Tags: []string{
+				"alert_type:long_running_query",
+				"database_name:analytics",
+				"duration_bucket:2h_plus",
+			},
+		},
+	}).Return(nil)
 
-				tags := getTags(rowMap)
-				err = monitor.sendMetric(rowMap, tags, false)
-				assert.NoError(t, err)
-			}
+	databaseConn, err := createDBConn("sqlite3", ":memory:")
+	assert.NoError(t, err)
+	defer databaseConn.Close()
+
+	monitor := &Monitor{
+		databaseConn:  databaseConn,
+		statsdClient:  mockStatsD,
+		name:          "postgres-long-running-queries",
+		sleepDuration: 100,
+		metric:        "postgres.long_running_query",
+		metricType:    "gauge",
+		eventConfig: config.EventConfig{
+			Enabled:              true,
+			TitleColumn:          "event_title",
+			TextColumn:           "event_text",
+			AlertType:            "warning",
+			Priority:             "normal",
+			SourceTypeName:       "anemometer",
+			AggregationKeyColumn: "event_aggregation_key",
+			Tags:                 []string{"alert_type:long_running_query"},
+			TagColumns:           []string{"database_name", "duration_bucket"},
+		},
+		sql: `
+			SELECT 1 AS metric,
+			       'analytics' AS database_name,
+			       '2h_plus' AS duration_bucket,
+			       'Long running Postgres query' AS event_title,
+			       'Database: analytics
+User: reporting_user
+PID: 41273' AS event_text,
+			       'postgres-long-running-query:analytics:41273' AS event_aggregation_key
+		`,
+	}
+
+	monitor.runOnce(false)
+}
+
+func TestProcessRowMetricFailureDoesNotSkipEvent(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockStatsD := mock_statsd.NewMockClientInterface(ctrl)
+	mockStatsD.EXPECT().GaugeWithTimestamp("postgres.long_running_query", 1.0, []string{"database_name:analytics"}, float64(1), gomock.Any()).Return(fmt.Errorf("metric send failed"))
+	mockStatsD.EXPECT().Gauge("anemometer.error", 1.0, []string{"name:postgres-long-running-queries"}, float64(1)).Return(nil)
+	mockStatsD.EXPECT().Event(statsdEventMatcher{
+		expected: statsd.Event{
+			Title:          "Long running Postgres query",
+			Text:           "Database: analytics",
+			AggregationKey: "postgres-long-running-query:analytics:41273",
+			Priority:       statsd.Normal,
+			SourceTypeName: "anemometer",
+			AlertType:      statsd.Warning,
+			Tags:           []string{"database_name:analytics"},
+		},
+	}).Return(nil)
+
+	monitor := &Monitor{
+		statsdClient: mockStatsD,
+		name:         "postgres-long-running-queries",
+		metric:       "postgres.long_running_query",
+		metricType:   "gauge",
+		eventConfig: config.EventConfig{
+			Enabled:              true,
+			Title:                "Long running Postgres query",
+			TextColumn:           "event_text",
+			AlertType:            "warning",
+			Priority:             "normal",
+			SourceTypeName:       "anemometer",
+			AggregationKeyColumn: "event_aggregation_key",
+			TagColumns:           []string{"database_name"},
+		},
+	}
+
+	monitor.processRow(map[string]interface{}{
+		"metric":                1,
+		"database_name":         "analytics",
+		"event_text":            "Database: analytics",
+		"event_aggregation_key": "postgres-long-running-query:analytics:41273",
+	}, false)
+}
+
+func TestMonitorNewRejectsInvalidEventConfig(t *testing.T) {
+	tests := []struct {
+		name        string
+		eventConfig config.EventConfig
+		expectedErr string
+	}{
+		{
+			name: "invalid_alert_type",
+			eventConfig: config.EventConfig{
+				Enabled:   true,
+				AlertType: "user_update",
+			},
+			expectedErr: "unknown event alert type: user_update",
+		},
+		{
+			name: "invalid_priority",
+			eventConfig: config.EventConfig{
+				Enabled:  true,
+				Priority: "high",
+			},
+			expectedErr: "unknown event priority: high",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			monitor, err := New(config.StatsdConfig{}, config.MonitorConfig{
+				EventConfig: tt.eventConfig,
+			})
+
+			assert.Nil(t, monitor)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), tt.expectedErr)
 		})
 	}
 }
@@ -284,6 +417,37 @@ func TestGetTags(t *testing.T) {
 			assert.ElementsMatch(t, tt.expected, result)
 		})
 	}
+}
+
+func TestGetMetricTagsWithEventConfig(t *testing.T) {
+	rowMap := map[string]interface{}{
+		"metric":                1,
+		"timestamp":             "2023-12-25T10:30:00Z",
+		"event_title":           "Long running Postgres query",
+		"event_text":            "PID: 41273",
+		"event_aggregation_key": "postgres-long-running-query:analytics:41273",
+		"database_name":         "analytics",
+		"duration_bucket":       "2h_plus",
+		"pid":                   41273,
+		"user_name":             "reporting_user",
+	}
+
+	monitor := &Monitor{
+		eventConfig: config.EventConfig{
+			Enabled:              true,
+			TitleColumn:          "event_title",
+			TextColumn:           "event_text",
+			AggregationKeyColumn: "event_aggregation_key",
+			TagColumns:           []string{"database_name", "duration_bucket"},
+		},
+	}
+
+	assert.ElementsMatch(t, []string{
+		"database_name:analytics",
+		"duration_bucket:2h_plus",
+		"pid:41273",
+		"user_name:reporting_user",
+	}, monitor.getMetricTags(rowMap))
 }
 
 func TestGetTimestamp(t *testing.T) {
@@ -530,4 +694,109 @@ func TestMetricTypeHandling(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEventTypeHandling(t *testing.T) {
+	tests := []struct {
+		name      string
+		alertType string
+		priority  string
+		expectErr bool
+	}{
+		{name: "defaults", alertType: "", priority: "", expectErr: false},
+		{name: "warning_normal", alertType: "warning", priority: "normal", expectErr: false},
+		{name: "success_low", alertType: "success", priority: "low", expectErr: false},
+		{name: "unknown_alert_type", alertType: "user_update", priority: "normal", expectErr: true},
+		{name: "unknown_priority", alertType: "warning", priority: "high", expectErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockStatsD := mock_statsd.NewMockClientInterface(ctrl)
+			if !tt.expectErr {
+				mockStatsD.EXPECT().Event(gomock.Any()).Return(nil)
+			}
+
+			monitor := &Monitor{
+				name:         "test-event-monitor",
+				statsdClient: mockStatsD,
+				eventConfig: config.EventConfig{
+					Enabled:    true,
+					Title:      "Test event",
+					Text:       "Test event body",
+					AlertType:  tt.alertType,
+					Priority:   tt.priority,
+					TagColumns: []string{},
+				},
+			}
+
+			err := monitor.sendEvent(map[string]interface{}{}, []string{}, false)
+
+			if tt.expectErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+type statsdEventMatcher struct {
+	expected statsd.Event
+}
+
+func (m statsdEventMatcher) Matches(value interface{}) bool {
+	event, ok := value.(*statsd.Event)
+	if !ok {
+		return false
+	}
+
+	return event.Title == m.expected.Title &&
+		event.Text == m.expected.Text &&
+		event.Timestamp.Equal(m.expected.Timestamp) &&
+		event.Hostname == m.expected.Hostname &&
+		event.AggregationKey == m.expected.AggregationKey &&
+		event.Priority == m.expected.Priority &&
+		event.SourceTypeName == m.expected.SourceTypeName &&
+		event.AlertType == m.expected.AlertType &&
+		reflect.DeepEqual(event.Tags, m.expected.Tags)
+}
+
+func (m statsdEventMatcher) String() string {
+	return fmt.Sprintf("matches statsd event %+v", m.expected)
+}
+
+type stringSliceMatcher struct {
+	expected []string
+}
+
+func (m stringSliceMatcher) Matches(value interface{}) bool {
+	actual, ok := value.([]string)
+	if !ok {
+		return false
+	}
+
+	if len(actual) != len(m.expected) {
+		return false
+	}
+
+	counts := make(map[string]int, len(m.expected))
+	for _, value := range m.expected {
+		counts[value]++
+	}
+	for _, value := range actual {
+		counts[value]--
+		if counts[value] < 0 {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (m stringSliceMatcher) String() string {
+	return fmt.Sprintf("matches string slice %v", m.expected)
 }

@@ -48,6 +48,139 @@ monitors:
 	assert.Equal(t, "gauge", cfg.Monitors[0].MetricType)
 }
 
+func TestEventConfig(t *testing.T) {
+	content := []byte(`
+---
+statsd:
+  address: 127.0.0.1:8125
+monitors:
+  - name: postgres-long-running-queries
+    database:
+      type: postgres
+      uri: postgresql://user:password@localhost:5432/database
+    sleep_duration: 1800
+    metric: postgres.long_running_query
+    metric_type: gauge
+    event:
+      enabled: true
+      title_column: event_title
+      text_column: event_text
+      alert_type: WARNING
+      priority: LOW
+      aggregation_key_column: event_aggregation_key
+      source_type_name: anemometer
+      tags:
+        - alert_type:long_running_query
+      tag_columns:
+        - database_name
+        - duration_bucket
+    sql: SELECT 1 AS metric
+`)
+	tmpfile, _ := ioutil.TempFile("", "config")
+
+	defer os.Remove(tmpfile.Name()) // clean up
+	defer tmpfile.Close()
+	tmpfile.Write(content)
+
+	cfg, err := Read(tmpfile.Name())
+	assert.NoError(t, err)
+
+	eventConfig := cfg.Monitors[0].EventConfig
+	assert.True(t, eventConfig.Enabled)
+	assert.Equal(t, "event_title", eventConfig.TitleColumn)
+	assert.Equal(t, "event_text", eventConfig.TextColumn)
+	assert.Equal(t, "warning", eventConfig.AlertType)
+	assert.Equal(t, "low", eventConfig.Priority)
+	assert.Equal(t, "event_aggregation_key", eventConfig.AggregationKeyColumn)
+	assert.Equal(t, "anemometer", eventConfig.SourceTypeName)
+	assert.Equal(t, []string{"alert_type:long_running_query"}, eventConfig.Tags)
+	assert.Equal(t, []string{"database_name", "duration_bucket"}, eventConfig.TagColumns)
+}
+
+func TestEventConfigDefaults(t *testing.T) {
+	content := []byte(`
+---
+statsd:
+  address: 127.0.0.1:8125
+monitors:
+  - name: postgres-long-running-queries
+    database:
+      type: postgres
+      uri: postgresql://user:password@localhost:5432/database
+    sleep_duration: 1800
+    metric: postgres.long_running_query
+    event:
+      enabled: true
+    sql: SELECT 1 AS metric
+`)
+	tmpfile, _ := ioutil.TempFile("", "config")
+
+	defer os.Remove(tmpfile.Name()) // clean up
+	defer tmpfile.Close()
+	tmpfile.Write(content)
+
+	cfg, err := Read(tmpfile.Name())
+	assert.NoError(t, err)
+
+	eventConfig := cfg.Monitors[0].EventConfig
+	assert.Equal(t, "info", eventConfig.AlertType)
+	assert.Equal(t, "normal", eventConfig.Priority)
+	assert.Equal(t, "anemometer", eventConfig.SourceTypeName)
+}
+
+func TestEventConfigValidation(t *testing.T) {
+	tests := []struct {
+		name        string
+		eventConfig string
+		expectedErr string
+	}{
+		{
+			name: "invalid_alert_type",
+			eventConfig: `
+      alert_type: warn
+`,
+			expectedErr: "unknown event alert type: warn",
+		},
+		{
+			name: "invalid_priority",
+			eventConfig: `
+      priority: high
+`,
+			expectedErr: "unknown event priority: high",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content := []byte(`
+---
+statsd:
+  address: 127.0.0.1:8125
+monitors:
+  - name: postgres-long-running-queries
+    database:
+      type: postgres
+      uri: postgresql://user:password@localhost:5432/database
+    sleep_duration: 1800
+    metric: postgres.long_running_query
+    event:
+      enabled: true
+` + tt.eventConfig + `
+    sql: SELECT 1 AS metric
+`)
+			tmpfile, _ := ioutil.TempFile("", "config")
+
+			defer os.Remove(tmpfile.Name()) // clean up
+			defer tmpfile.Close()
+			tmpfile.Write(content)
+
+			_, err := Read(tmpfile.Name())
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), tt.expectedErr)
+		})
+	}
+}
+
 func TestMetricTypes(t *testing.T) {
 	tests := []struct {
 		name          string
