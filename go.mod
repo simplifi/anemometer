@@ -1,8 +1,8 @@
 module github.com/simplifi/anemometer
 
-go 1.24.0
+go 1.25.0
 
-toolchain go1.24.2
+toolchain go1.25.11
 
 require (
 	github.com/DataDog/datadog-go/v5 v5.8.3
