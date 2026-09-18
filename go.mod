@@ -3,7 +3,7 @@ module github.com/simplifi/anemometer
 go 1.25.0
 
 require (
-	github.com/DataDog/datadog-go/v5 v5.8.3
+	github.com/DataDog/datadog-go/v5 v5.9.1
 	github.com/golang/mock v1.6.0
 	github.com/lib/pq v1.12.3
 	github.com/mattn/go-sqlite3 v1.14.47
